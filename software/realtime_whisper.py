@@ -11,6 +11,7 @@ from faster_whisper import WhisperModel
 
 
 def realtime_transcriptions(
+    prompt: str,
     *,
     model_name: str = "tiny.en",
     rate: int = 16000,
@@ -19,7 +20,7 @@ def realtime_transcriptions(
     end_silence_ms: int = 300,  # pause to end utterance
     padding_ms: int = 300,  # pre-roll
     max_utterance_s: int = 15,  # safety cap
-    cpu_threads: int = 8,
+    cpu_threads: int = 4,
 ) -> Generator[str, None, None]:
     """
     Generator yielding transcribed utterances as strings.
@@ -103,15 +104,18 @@ def realtime_transcriptions(
 
     def transcribe(frames: list[bytes]) -> str:
         audio_i16 = np.frombuffer(b"".join(frames), dtype=np.int16)
+
         audio_f32 = audio_i16.astype(np.float32) / 32768.0
+        audio_f32 = _boost_audio(audio_f32, gain=2.5)
 
         segments, _ = model.transcribe(
             audio_f32,
+            initial_prompt=prompt,
             language="en",
-            beam_size=1,
+            beam_size=3,
             best_of=1,
             temperature=0.0,
-            vad_filter=True,
+            vad_filter=False,
             condition_on_previous_text=False,
         )
         return "".join(s.text for s in segments).strip()
@@ -157,3 +161,14 @@ def realtime_transcriptions(
     finally:
         stop_evt.set()
         t_audio.join(timeout=1.0)
+
+def _boost_audio(
+    audio: np.ndarray,
+    gain: float = 2.0,
+    max_peak: float = 0.95,
+) -> np.ndarray:
+    audio = audio * gain
+    peak = np.max(np.abs(audio))
+    if peak > max_peak:
+        audio = audio * (max_peak / peak)
+    return audio
